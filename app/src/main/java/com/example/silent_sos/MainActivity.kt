@@ -26,6 +26,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -39,6 +40,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.google.firebase.auth.FirebaseAuth
 
 
 class MainActivity : ComponentActivity() {
@@ -78,8 +80,30 @@ enum class Screen {
 @Composable
 fun SilentSOSApp() {
 
+    val auth = remember {
+        FirebaseAuth.getInstance()
+    }
+
+    // Check if the user is already logged in
+    var isLoggedIn by remember {
+        mutableStateOf(auth.currentUser != null)
+    }
+
     var currentScreen by remember {
         mutableStateOf(Screen.HOME)
+    }
+
+    // Show login screen if user is not logged in
+    if (!isLoggedIn) {
+
+        AuthScreen(
+            onAuthSuccess = {
+                isLoggedIn = true
+                currentScreen = Screen.HOME
+            }
+        )
+
+        return
     }
 
     // Android physical back button
@@ -151,9 +175,302 @@ fun SilentSOSApp() {
             ProfileScreen(
                 onBack = {
                     currentScreen = Screen.HOME
+                },
+                userEmail = auth.currentUser?.email ?: "No email",
+                onLogout = {
+                    auth.signOut()
+                    isLoggedIn = false
+                    currentScreen = Screen.HOME
                 }
             )
         }
+    }
+}
+
+
+// =====================================================
+// FIREBASE AUTHENTICATION SCREEN
+// =====================================================
+
+@Composable
+fun AuthScreen(
+    onAuthSuccess: () -> Unit
+) {
+
+    val auth = remember {
+        FirebaseAuth.getInstance()
+    }
+
+    var isLoginMode by remember {
+        mutableStateOf(true)
+    }
+
+    var email by remember {
+        mutableStateOf("")
+    }
+
+    var password by remember {
+        mutableStateOf("")
+    }
+
+    var confirmPassword by remember {
+        mutableStateOf("")
+    }
+
+    var errorMessage by remember {
+        mutableStateOf("")
+    }
+
+    var isLoading by remember {
+        mutableStateOf(false)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xFFF7F9FC))
+            .verticalScroll(rememberScrollState())
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+
+        Spacer(
+            modifier = Modifier.height(55.dp)
+        )
+
+        Text(
+            text = "🛡️",
+            fontSize = 65.sp
+        )
+
+        Spacer(
+            modifier = Modifier.height(10.dp)
+        )
+
+        Text(
+            text = "SilentSOS",
+            fontSize = 32.sp,
+            fontWeight = FontWeight.Bold
+        )
+
+        Spacer(
+            modifier = Modifier.height(5.dp)
+        )
+
+        Text(
+            text = "Your personal safety companion",
+            fontSize = 15.sp,
+            color = Color.Gray
+        )
+
+        Spacer(
+            modifier = Modifier.height(35.dp)
+        )
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = Color.White
+            )
+        ) {
+
+            Column(
+                modifier = Modifier.padding(20.dp)
+            ) {
+
+                Text(
+                    text = if (isLoginMode) {
+                        "Welcome Back"
+                    } else {
+                        "Create Account"
+                    },
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Spacer(
+                    modifier = Modifier.height(20.dp)
+                )
+
+                OutlinedTextField(
+                    value = email,
+                    onValueChange = {
+                        email = it
+                        errorMessage = ""
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = {
+                        Text("Email")
+                    },
+                    singleLine = true
+                )
+
+                Spacer(
+                    modifier = Modifier.height(15.dp)
+                )
+
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = {
+                        password = it
+                        errorMessage = ""
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = {
+                        Text("Password")
+                    },
+                    singleLine = true
+                )
+
+                if (!isLoginMode) {
+
+                    Spacer(
+                        modifier = Modifier.height(15.dp)
+                    )
+
+                    OutlinedTextField(
+                        value = confirmPassword,
+                        onValueChange = {
+                            confirmPassword = it
+                            errorMessage = ""
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = {
+                            Text("Confirm Password")
+                        },
+                        singleLine = true
+                    )
+                }
+
+                Spacer(
+                    modifier = Modifier.height(20.dp)
+                )
+
+                if (errorMessage.isNotEmpty()) {
+
+                    Text(
+                        text = errorMessage,
+                        color = Color(0xFFD32F2F),
+                        fontSize = 14.sp
+                    )
+
+                    Spacer(
+                        modifier = Modifier.height(10.dp)
+                    )
+                }
+
+                Button(
+                    onClick = {
+
+                        if (email.isBlank()) {
+
+                            errorMessage = "Please enter your email."
+
+                        } else if (password.isBlank()) {
+
+                            errorMessage = "Please enter your password."
+
+                        } else if (!isLoginMode && password != confirmPassword) {
+
+                            errorMessage = "Passwords do not match."
+
+                        } else {
+
+                            isLoading = true
+                            errorMessage = ""
+
+                            if (isLoginMode) {
+
+                                // Firebase LOGIN
+                                auth.signInWithEmailAndPassword(
+                                    email.trim(),
+                                    password
+                                ).addOnCompleteListener { task ->
+
+                                    isLoading = false
+
+                                    if (task.isSuccessful) {
+
+                                        onAuthSuccess()
+
+                                    } else {
+
+                                        errorMessage =
+                                            task.exception?.message
+                                                ?: "Login failed. Please try again."
+                                    }
+                                }
+
+                            } else {
+
+                                // Firebase CREATE ACCOUNT
+                                auth.createUserWithEmailAndPassword(
+                                    email.trim(),
+                                    password
+                                ).addOnCompleteListener { task ->
+
+                                    isLoading = false
+
+                                    if (task.isSuccessful) {
+
+                                        onAuthSuccess()
+
+                                    } else {
+
+                                        errorMessage =
+                                            task.exception?.message
+                                                ?: "Account creation failed."
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !isLoading
+                ) {
+
+                    Text(
+                        text = when {
+                            isLoading -> "Please wait..."
+                            isLoginMode -> "LOGIN"
+                            else -> "CREATE ACCOUNT"
+                        }
+                    )
+                }
+
+                Spacer(
+                    modifier = Modifier.height(10.dp)
+                )
+
+                OutlinedButton(
+                    onClick = {
+                        isLoginMode = !isLoginMode
+                        errorMessage = ""
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+
+                    Text(
+                        text = if (isLoginMode) {
+                            "Create a new account"
+                        } else {
+                            "Already have an account? Login"
+                        }
+                    )
+                }
+            }
+        }
+
+        Spacer(
+            modifier = Modifier.height(20.dp)
+        )
+
+        Text(
+            text = "Your safety. Your control.",
+            fontSize = 14.sp,
+            color = Color.Gray
+        )
     }
 }
 
@@ -176,6 +493,7 @@ fun HomeScreen(
     ) {
 
         // TOP BAR
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -623,7 +941,6 @@ fun BackButton(
         verticalAlignment = Alignment.CenterVertically
     ) {
 
-        // LARGE CLICKABLE AREA
         Box(
             modifier = Modifier
                 .size(52.dp)
@@ -1028,7 +1345,9 @@ fun AlertsScreen(
 
 @Composable
 fun ProfileScreen(
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    userEmail: String,
+    onLogout: () -> Unit
 ) {
 
     Column(
@@ -1041,7 +1360,9 @@ fun ProfileScreen(
         )
 
         Column(
-            modifier = Modifier.padding(20.dp)
+            modifier = Modifier
+                .padding(20.dp)
+                .verticalScroll(rememberScrollState())
         ) {
 
             Text(
@@ -1057,6 +1378,26 @@ fun ProfileScreen(
                 text = "My Profile",
                 fontSize = 26.sp,
                 fontWeight = FontWeight.Bold
+            )
+
+            Spacer(
+                modifier = Modifier.height(25.dp)
+            )
+
+            Text(
+                text = "Account",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            Spacer(
+                modifier = Modifier.height(8.dp)
+            )
+
+            Text(
+                text = userEmail,
+                fontSize = 15.sp,
+                color = Color.Gray
             )
 
             Spacer(
@@ -1081,6 +1422,22 @@ fun ProfileScreen(
 
                 Text(
                     text = "Manage Contacts"
+                )
+            }
+
+            Spacer(
+                modifier = Modifier.height(30.dp)
+            )
+
+            OutlinedButton(
+                onClick = {
+                    onLogout()
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+
+                Text(
+                    text = "LOG OUT"
                 )
             }
         }
