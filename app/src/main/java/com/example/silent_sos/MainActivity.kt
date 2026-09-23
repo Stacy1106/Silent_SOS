@@ -4,6 +4,9 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -40,7 +43,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.DisposableEffect
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.SetOptions
 
 
 class MainActivity : ComponentActivity() {
@@ -69,7 +75,8 @@ enum class Screen {
     AI,
     EVIDENCE,
     ALERTS,
-    PROFILE
+    PROFILE,
+    EMERGENCY_CONTACTS
 }
 
 
@@ -184,8 +191,14 @@ fun SilentSOSApp() {
                 }
             )
         }
+        Screen.EMERGENCY_CONTACTS -> EmergencyContactsScreen(
+            onBack = {
+                currentScreen = Screen.HOME
+            }
+        )
     }
 }
+
 
 
 // =====================================================
@@ -199,6 +212,9 @@ fun AuthScreen(
 
     val auth = remember {
         FirebaseAuth.getInstance()
+    }
+    val db = remember {
+        FirebaseFirestore.getInstance()
     }
 
     var isLoginMode by remember {
@@ -392,7 +408,29 @@ fun AuthScreen(
 
                                     if (task.isSuccessful) {
 
-                                        onAuthSuccess()
+                                        val user = auth.currentUser
+
+                                        if (user != null) {
+
+                                            val userData = hashMapOf(
+                                                "email" to (user.email ?: "")
+                                            )
+
+                                            db.collection("users")
+                                                .document(user.uid)
+                                                .set(userData, SetOptions.merge())
+                                                .addOnSuccessListener {
+
+                                                    onAuthSuccess()
+
+                                                }
+                                                .addOnFailureListener { e ->
+
+                                                    errorMessage =
+                                                        e.message ?: "Could not save user profile."
+                                                }
+
+                                        }
 
                                     } else {
 
@@ -414,7 +452,29 @@ fun AuthScreen(
 
                                     if (task.isSuccessful) {
 
-                                        onAuthSuccess()
+                                        val user = auth.currentUser
+
+                                        if (user != null) {
+
+                                            val userData = hashMapOf(
+                                                "email" to (user.email ?: "")
+                                            )
+
+                                            db.collection("users")
+                                                .document(user.uid)
+                                                .set(userData, SetOptions.merge())
+                                                .addOnSuccessListener {
+
+                                                    onAuthSuccess()
+
+                                                }
+                                                .addOnFailureListener { e ->
+
+                                                    errorMessage =
+                                                        e.message ?: "Could not save user profile."
+                                                }
+
+                                        }
 
                                     } else {
 
@@ -687,6 +747,23 @@ fun HomeScreen(
                 modifier = Modifier.weight(1f),
                 onClick = {
                     onNavigate(Screen.MAP)
+                }
+            )
+        }
+        Spacer(
+            modifier = Modifier.height(12.dp)
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+
+            FeatureCard(
+                emoji = "📞",
+                title = "Emergency Contacts",
+                modifier = Modifier.weight(1f),
+                onClick = {
+                    onNavigate(Screen.EMERGENCY_CONTACTS)
                 }
             )
         }
@@ -978,7 +1055,23 @@ fun BackButton(
 fun SOSScreen(
     onBack: () -> Unit
 ) {
+    val db = FirebaseFirestore.getInstance()
+    val auth = FirebaseAuth.getInstance()
+    val locationPermissionLauncher =
+        rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.RequestMultiplePermissions()
+        ) { permissions ->
 
+            val fineLocationGranted =
+                permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true
+
+            val coarseLocationGranted =
+                permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+
+            if (fineLocationGranted || coarseLocationGranted) {
+                println("Location permission granted")
+            }
+        }
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1013,7 +1106,33 @@ fun SOSScreen(
 
             Button(
                 onClick = {
-                    // SOS functionality will be added later
+                    locationPermissionLauncher.launch(
+                        arrayOf(
+                            Manifest.permission.ACCESS_FINE_LOCATION,
+                            Manifest.permission.ACCESS_COARSE_LOCATION
+                        )
+                    )
+
+                    val user = auth.currentUser
+
+                    if (user != null) {
+
+                        val sosData = hashMapOf(
+                            "timestamp" to com.google.firebase.Timestamp.now(),
+                            "status" to "SOS_TRIGGERED"
+                        )
+
+                        db.collection("users")
+                            .document(user.uid)
+                            .collection("sos_events")
+                            .add(sosData)
+                            .addOnSuccessListener {
+                                println("SOS event saved successfully")
+                            }
+                            .addOnFailureListener { e ->
+                                println("SOS ERROR: ${e.message}")
+                            }
+                    }
                 },
                 modifier = Modifier.size(180.dp),
                 shape = CircleShape,
@@ -1287,6 +1406,259 @@ fun EvidenceScreen(
         }
     }
 }
+@Composable
+fun EmergencyContactsScreen(
+    onBack: () -> Unit
+) {
+    val db = remember {
+        FirebaseFirestore.getInstance()
+    }
+
+    val auth = remember {
+        FirebaseAuth.getInstance()
+    }
+
+    var showAddContact by remember {
+        mutableStateOf(false)
+    }
+
+    var contactName by remember {
+        mutableStateOf("")
+    }
+
+    var contactPhone by remember {
+        mutableStateOf("")
+    }
+
+    var contactRelationship by remember {
+        mutableStateOf("")
+    }
+    var contacts by remember {
+        mutableStateOf<List<Map<String, String>>>(emptyList())
+    }
+
+    val userId = auth.currentUser?.uid
+
+    DisposableEffect(userId) {
+
+        var listenerRegistration: com.google.firebase.firestore.ListenerRegistration? = null
+
+        if (userId != null) {
+
+            listenerRegistration = db.collection("users")
+                .document(userId)
+                .collection("emergency_contacts")
+                .addSnapshotListener { snapshot, error ->
+
+                    if (error == null && snapshot != null) {
+
+                        contacts = snapshot.documents.map { document ->
+
+                            mapOf(
+                                "name" to (document.getString("name") ?: ""),
+                                "phone" to (document.getString("phone") ?: ""),
+                                "relationship" to (document.getString("relationship") ?: "")
+                            )
+                        }
+                    }
+                }
+        }
+
+        onDispose {
+            listenerRegistration?.remove()
+        }
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize()
+    ) {
+
+        BackButton(
+            title = "Emergency Contacts",
+            onBack = onBack
+        )
+
+        Column(
+            modifier = Modifier.padding(20.dp)
+        ) {
+
+            Text(
+                text = "📞",
+                fontSize = 55.sp
+            )
+
+            Spacer(
+                modifier = Modifier.height(10.dp)
+            )
+
+            Text(
+                text = "Emergency Contacts",
+                fontSize = 25.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            Spacer(
+                modifier = Modifier.height(10.dp)
+            )
+
+            Text(
+                text = "Add trusted people who can be contacted during an emergency."
+            )
+
+            Spacer(
+                modifier = Modifier.height(25.dp)
+            )
+
+            Button(
+                onClick = {
+                    showAddContact = true
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("＋ Add Emergency Contact")
+            }
+
+            if (showAddContact) {
+
+                Spacer(
+                    modifier = Modifier.height(20.dp)
+                )
+
+                OutlinedTextField(
+                    value = contactName,
+                    onValueChange = {
+                        contactName = it
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = {
+                        Text("Contact Name")
+                    },
+                    singleLine = true
+                )
+
+                Spacer(
+                    modifier = Modifier.height(12.dp)
+                )
+
+                OutlinedTextField(
+                    value = contactPhone,
+                    onValueChange = {
+                        contactPhone = it
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = {
+                        Text("Phone Number")
+                    },
+                    singleLine = true
+                )
+
+                Spacer(
+                    modifier = Modifier.height(12.dp)
+                )
+
+                OutlinedTextField(
+                    value = contactRelationship,
+                    onValueChange = {
+                        contactRelationship = it
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = {
+                        Text("Relationship")
+                    },
+                    singleLine = true
+                )
+
+                Spacer(
+                    modifier = Modifier.height(12.dp)
+                )
+
+                Button(
+                    onClick = {
+
+                        val user = auth.currentUser
+
+                        if (user != null &&
+                            contactName.isNotBlank() &&
+                            contactPhone.isNotBlank()
+                        ) {
+
+                            val contactData = hashMapOf(
+                                "name" to contactName.trim(),
+                                "phone" to contactPhone.trim(),
+                                "relationship" to contactRelationship.trim()
+                            )
+
+                            db.collection("users")
+                                .document(user.uid)
+                                .collection("emergency_contacts")
+                                .add(contactData)
+                                .addOnSuccessListener {
+
+                                    contactName = ""
+                                    contactPhone = ""
+                                    contactRelationship = ""
+                                    showAddContact = false
+                                }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("SAVE CONTACT")
+                }
+                Spacer(
+                    modifier = Modifier.height(25.dp)
+                )
+
+                if (contacts.isNotEmpty()) {
+
+                    Text(
+                        text = "Saved Contacts",
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    Spacer(
+                        modifier = Modifier.height(12.dp)
+                    )
+
+                    contacts.forEach { contact ->
+
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 12.dp)
+                        ) {
+
+                            Column(
+                                modifier = Modifier.padding(16.dp)
+                            ) {
+
+                                Text(
+                                    text = contact["name"] ?: "",
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+
+                                Spacer(
+                                    modifier = Modifier.height(5.dp)
+                                )
+
+                                Text(
+                                    text = "📞 ${contact["phone"] ?: ""}"
+                                )
+
+                                Text(
+                                    text = "Relationship: ${contact["relationship"] ?: ""}"
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 
 
 // =====================================================
