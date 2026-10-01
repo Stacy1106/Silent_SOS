@@ -47,6 +47,15 @@ import androidx.compose.runtime.DisposableEffect
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
+import androidx.compose.ui.platform.LocalContext
+import com.google.android.gms.location.CurrentLocationRequest
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.ui.text.style.TextAlign
+import com.google.firebase.messaging.FirebaseMessaging
 
 
 class MainActivity : ComponentActivity() {
@@ -90,6 +99,44 @@ fun SilentSOSApp() {
     val auth = remember {
         FirebaseAuth.getInstance()
     }
+    FirebaseMessaging.getInstance().token
+        .addOnCompleteListener { task ->
+
+            if (task.isSuccessful) {
+
+                val token = task.result
+
+                val user = auth.currentUser
+
+                if (user != null) {
+
+                    val db = FirebaseFirestore.getInstance()
+
+                    db.collection("users")
+                        .document(user.uid)
+                        .set(
+                            mapOf(
+                                "fcmToken" to token
+                            ),
+                            SetOptions.merge()
+                        )
+                        .addOnSuccessListener {
+                            println("FCM token saved to Firestore")
+                        }
+                        .addOnFailureListener { e ->
+                            println(
+                                "FCM token save error: ${e.message}"
+                            )
+                        }
+                }
+
+            } else {
+
+                println(
+                    "FCM TOKEN ERROR: ${task.exception?.message}"
+                )
+            }
+        }
 
     // Check if the user is already logged in
     var isLoggedIn by remember {
@@ -412,6 +459,10 @@ fun AuthScreen(
 
                                         if (user != null) {
 
+                                            // Open Home immediately after successful Firebase login.
+                                            onAuthSuccess()
+
+                                            // Save/update the user's profile in Firestore.
                                             val userData = hashMapOf(
                                                 "email" to (user.email ?: "")
                                             )
@@ -419,15 +470,8 @@ fun AuthScreen(
                                             db.collection("users")
                                                 .document(user.uid)
                                                 .set(userData, SetOptions.merge())
-                                                .addOnSuccessListener {
-
-                                                    onAuthSuccess()
-
-                                                }
                                                 .addOnFailureListener { e ->
-
-                                                    errorMessage =
-                                                        e.message ?: "Could not save user profile."
+                                                    println("Firestore user save error: ${e.message}")
                                                 }
 
                                         }
@@ -456,6 +500,10 @@ fun AuthScreen(
 
                                         if (user != null) {
 
+                                            // Open Home immediately after successful account creation.
+                                            onAuthSuccess()
+
+                                            // Save the user's profile in Firestore.
                                             val userData = hashMapOf(
                                                 "email" to (user.email ?: "")
                                             )
@@ -463,15 +511,8 @@ fun AuthScreen(
                                             db.collection("users")
                                                 .document(user.uid)
                                                 .set(userData, SetOptions.merge())
-                                                .addOnSuccessListener {
-
-                                                    onAuthSuccess()
-
-                                                }
                                                 .addOnFailureListener { e ->
-
-                                                    errorMessage =
-                                                        e.message ?: "Could not save user profile."
+                                                    println("Firestore user save error: ${e.message}")
                                                 }
 
                                         }
@@ -832,8 +873,7 @@ fun HomeScreen(
                 Text(
                     text = "85%",
                     fontSize = 28.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color(0xFF2E7D32)
+                    fontWeight = FontWeight.Bold
                 )
 
                 Text(
@@ -1055,8 +1095,130 @@ fun BackButton(
 fun SOSScreen(
     onBack: () -> Unit
 ) {
+
     val db = FirebaseFirestore.getInstance()
     val auth = FirebaseAuth.getInstance()
+
+    val context = LocalContext.current
+
+    val fusedLocationClient = remember {
+        LocationServices.getFusedLocationProviderClient(context)
+    }
+
+    val localDb = remember {
+        DataBaseHelper(context)
+    }
+
+    var sosStatus by remember {
+        mutableStateOf("Ready to send SOS")
+    }
+
+    fun getLocationAndSaveSOS() {
+
+        sosStatus = "Getting your location..."
+
+        try {
+
+            val request = CurrentLocationRequest.Builder()
+                .setPriority(Priority.PRIORITY_HIGH_ACCURACY)
+                .build()
+
+            fusedLocationClient.getCurrentLocation(
+                request,
+                null
+            ).addOnSuccessListener { location ->
+
+                if (location != null) {
+
+                    val latitude = location.latitude
+                    val longitude = location.longitude
+
+                    println("Latitude: $latitude")
+                    println("Longitude: $longitude")
+
+                    sosStatus = "Location found. Saving SOS..."
+
+                    // ============================
+                    // SAVE TO SQLITE
+                    // ============================
+
+                    val timestamp =
+                        System.currentTimeMillis().toString()
+
+                    val localSaved = localDb.addSosEvent(
+                        timestamp = timestamp,
+                        status = "SOS_TRIGGERED",
+                        latitude = latitude,
+                        longitude = longitude
+                    )
+
+                    println("SQLite SOS saved: $localSaved")
+
+                    // ============================
+                    // SAVE TO FIRESTORE
+                    // ============================
+
+                    val user = auth.currentUser
+
+                    if (user != null) {
+
+                        val sosData = hashMapOf(
+                            "timestamp" to com.google.firebase.Timestamp.now(),
+                            "status" to "SOS_TRIGGERED",
+                            "latitude" to latitude,
+                            "longitude" to longitude
+                        )
+
+                        db.collection("users")
+                            .document(user.uid)
+                            .collection("sos_events")
+                            .add(sosData)
+                            .addOnSuccessListener {
+
+                                println("SOS event saved successfully")
+
+                                sosStatus =
+                                    "🚨 SOS SENT SUCCESSFULLY\nLocation saved"
+                            }
+                            .addOnFailureListener { e ->
+
+                                println("SOS ERROR: ${e.message}")
+
+                                sosStatus =
+                                    "Location saved, but Firebase failed"
+                            }
+
+                    } else {
+
+                        sosStatus =
+                            "SOS saved locally, but user is not logged in"
+                    }
+
+                } else {
+
+                    println("Could not get current location")
+
+                    sosStatus =
+                        "Could not get location.\nPlease enable emulator location."
+                }
+
+            }.addOnFailureListener { e ->
+
+                println("Location error: ${e.message}")
+
+                sosStatus =
+                    "Location error: ${e.message}"
+            }
+
+        } catch (e: SecurityException) {
+
+            println("Location permission error: ${e.message}")
+
+            sosStatus =
+                "Location permission is required."
+        }
+    }
+
     val locationPermissionLauncher =
         rememberLauncherForActivityResult(
             contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -1069,9 +1231,18 @@ fun SOSScreen(
                 permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
 
             if (fineLocationGranted || coarseLocationGranted) {
-                println("Location permission granted")
+
+                sosStatus = "Location permission granted..."
+
+                getLocationAndSaveSOS()
+
+            } else {
+
+                sosStatus =
+                    "Location permission denied."
             }
         }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -1106,36 +1277,42 @@ fun SOSScreen(
 
             Button(
                 onClick = {
-                    locationPermissionLauncher.launch(
-                        arrayOf(
-                            Manifest.permission.ACCESS_FINE_LOCATION,
+
+                    val fineGranted =
+                        ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.ACCESS_FINE_LOCATION
+                        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+                    val coarseGranted =
+                        ContextCompat.checkSelfPermission(
+                            context,
                             Manifest.permission.ACCESS_COARSE_LOCATION
+                        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+                    if (fineGranted || coarseGranted) {
+
+                        // Permission already granted
+                        getLocationAndSaveSOS()
+
+                    } else {
+
+                        // Ask for permission
+                        sosStatus = "Requesting location permission..."
+
+                        locationPermissionLauncher.launch(
+                            arrayOf(
+                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                Manifest.permission.ACCESS_COARSE_LOCATION
+                            )
                         )
-                    )
-
-                    val user = auth.currentUser
-
-                    if (user != null) {
-
-                        val sosData = hashMapOf(
-                            "timestamp" to com.google.firebase.Timestamp.now(),
-                            "status" to "SOS_TRIGGERED"
-                        )
-
-                        db.collection("users")
-                            .document(user.uid)
-                            .collection("sos_events")
-                            .add(sosData)
-                            .addOnSuccessListener {
-                                println("SOS event saved successfully")
-                            }
-                            .addOnFailureListener { e ->
-                                println("SOS ERROR: ${e.message}")
-                            }
                     }
                 },
+
                 modifier = Modifier.size(180.dp),
+
                 shape = CircleShape,
+
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Color(0xFFD32F2F)
                 )
@@ -1153,14 +1330,23 @@ fun SOSScreen(
             )
 
             Text(
+                text = sosStatus,
+                textAlign = TextAlign.Center,
+                color = Color.Gray,
+                fontSize = 16.sp
+            )
+
+            Spacer(
+                modifier = Modifier.height(15.dp)
+            )
+
+            Text(
                 text = "Your emergency contacts will be notified.",
                 color = Color.Gray
             )
         }
     }
 }
-
-
 // =====================================================
 // SAFE WALK SCREEN
 // =====================================================
@@ -1413,6 +1599,11 @@ fun EmergencyContactsScreen(
     val db = remember {
         FirebaseFirestore.getInstance()
     }
+    val context = LocalContext.current
+
+    val localDb = remember {
+        DataBaseHelper(context)
+    }
 
     val auth = remember {
         FirebaseAuth.getInstance()
@@ -1582,6 +1773,14 @@ fun EmergencyContactsScreen(
                             contactPhone.isNotBlank()
                         ) {
 
+                            // LOCAL DATABASE
+                            localDb.addContact(
+                                name = contactName.trim(),
+                                phone = contactPhone.trim(),
+                                relationship = contactRelationship.trim()
+                            )
+
+                            // FIREBASE DATABASE
                             val contactData = hashMapOf(
                                 "name" to contactName.trim(),
                                 "phone" to contactPhone.trim(),
@@ -1609,48 +1808,50 @@ fun EmergencyContactsScreen(
                     modifier = Modifier.height(25.dp)
                 )
 
-                if (contacts.isNotEmpty()) {
 
-                    Text(
-                        text = "Saved Contacts",
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+            }
 
-                    Spacer(
-                        modifier = Modifier.height(12.dp)
-                    )
+            if (contacts.isNotEmpty()) {
 
-                    contacts.forEach { contact ->
+                Text(
+                    text = "Saved Contacts",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold
+                )
 
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 12.dp)
+                Spacer(
+                    modifier = Modifier.height(12.dp)
+                )
+
+                contacts.forEach { contact ->
+
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp)
+                    ) {
+
+                        Column(
+                            modifier = Modifier.padding(16.dp)
                         ) {
 
-                            Column(
-                                modifier = Modifier.padding(16.dp)
-                            ) {
+                            Text(
+                                text = contact["name"] ?: "",
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold
+                            )
 
-                                Text(
-                                    text = contact["name"] ?: "",
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
+                            Spacer(
+                                modifier = Modifier.height(5.dp)
+                            )
 
-                                Spacer(
-                                    modifier = Modifier.height(5.dp)
-                                )
+                            Text(
+                                text = "📞 ${contact["phone"] ?: ""}"
+                            )
 
-                                Text(
-                                    text = "📞 ${contact["phone"] ?: ""}"
-                                )
-
-                                Text(
-                                    text = "Relationship: ${contact["relationship"] ?: ""}"
-                                )
-                            }
+                            Text(
+                                text = "Relationship: ${contact["relationship"] ?: ""}"
+                            )
                         }
                     }
                 }
