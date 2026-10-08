@@ -56,8 +56,28 @@ import androidx.core.content.ContextCompat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.ui.text.style.TextAlign
 import com.google.firebase.messaging.FirebaseMessaging
+import android.preference.PreferenceManager
+import org.osmdroid.config.Configuration
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.views.MapView
+import org.osmdroid.util.GeoPoint
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.DisposableEffect
+import org.osmdroid.views.overlay.CopyrightOverlay
+import org.osmdroid.views.overlay.Marker
 
 
+class SilentSOSApplication : android.app.Application() {
+
+    override fun onCreate() {
+        super.onCreate()
+
+        Configuration.getInstance().userAgentValue =
+            "SilentSOS/1.0 (Android; com.example.silent_sos)"
+    }
+}
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -1428,6 +1448,31 @@ fun MapScreen(
     onBack: () -> Unit
 ) {
 
+    val context = LocalContext.current
+    val fusedLocationClient = remember {
+        LocationServices.getFusedLocationProviderClient(context)
+    }
+    var currentLocation by remember {
+        mutableStateOf<GeoPoint?>(null)
+    }
+    val hasLocationPermission =
+        ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    Configuration.getInstance().load(
+        context,
+        PreferenceManager.getDefaultSharedPreferences(context)
+
+    )
+
+    Configuration.getInstance().userAgentValue =
+        "SilentSOS/1.0 (Android; com.example.silent_sos)"
     Column(
         modifier = Modifier.fillMaxSize()
     ) {
@@ -1437,41 +1482,40 @@ fun MapScreen(
             onBack = onBack
         )
 
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color(0xFFEAF2F8)),
-            contentAlignment = Alignment.Center
-        ) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
 
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
+            factory = { ctx ->
 
-                Text(
-                    text = "🗺️",
-                    fontSize = 70.sp
-                )
+                MapView(ctx).apply {
 
-                Spacer(
-                    modifier = Modifier.height(10.dp)
-                )
+                    // OpenStreetMap tiles
+                    setTileSource(TileSourceFactory.OpenTopo)
 
-                Text(
-                    text = "Safety Map",
-                    fontSize = 25.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                    setMultiTouchControls(true)
 
-                Text(
-                    text = "Google Maps will be added later.",
-                    color = Color.Gray
-                )
+// OpenStreetMap attribution
+                    val copyrightOverlay = CopyrightOverlay(ctx)
+                    copyrightOverlay.setCopyrightNotice(
+                        "© OpenStreetMap contributors"
+                    )
+                    overlays.add(copyrightOverlay)
+                    val mumbai = GeoPoint(
+                        19.0760,
+                        72.8777
+                    )
+
+                    controller.setZoom(12.0)
+                    controller.setCenter(mumbai)
+                    val marker = Marker(this)
+                    marker.position = mumbai
+                    marker.title = "Your Location"
+                    overlays.add(marker)
+                }
             }
-        }
+        )
     }
 }
-
 
 // =====================================================
 // AI ASSISTANT SCREEN
