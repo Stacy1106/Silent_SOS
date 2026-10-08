@@ -68,4 +68,5 @@ dependencies {
     implementation("com.google.firebase:firebase-storage")
     implementation("com.google.firebase:firebase-messaging")
     implementation("com.google.android.gms:play-services-location:21.4.0")
+    implementation("org.osmdroid:osmdroid-android:6.1.20")
 }
